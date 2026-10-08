@@ -1,0 +1,35 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+.aws/
+aws_credentials*
+aws-credentials*
+*.pem
+*.key
+config.yaml
+
+# Local video and generated files
+videos/
+output/
+
+# Local analysis/history data
+analysis_history.csv
+
+# IDE
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Backup files
+*.backup
+*.bak
+*_backup
