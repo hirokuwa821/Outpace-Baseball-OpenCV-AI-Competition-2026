@@ -14,6 +14,7 @@ import sys
 from pathlib import Path
 import datetime
 import secrets
+import json
 
 # --- パス設定とインポート ---
 sys.path.append(str(Path(__file__).parent))
@@ -687,10 +688,12 @@ if should_run:
             )
 
 # --- メインタブ構成 ---
-tab_main, tab_compare, tab_history = st.tabs([
+coach_ui_lang = lang
+tab_main, tab_compare, tab_history, tab_coach = st.tabs([
     i18n.t("tab_single", lang),
     i18n.t("tab_compare", lang),
     i18n.t("tab_history", lang),
+    i18n.t("coach_tab_title", coach_ui_lang),
 ])
 
 
@@ -1932,3 +1935,159 @@ else:
         st.markdown('</div>', unsafe_allow_html=True)
     with tab_compare:
         st.info("動画を解析すると、ここで2球のフォーム・軌道比較が行えます。" if lang == "ja" else "Analyze videos to compare 2 pitches here.")
+
+with tab_coach:
+    coach_selected_lang = st.session_state.get("pitch_coach_language_select", "auto")
+    coach_ui_lang = lang
+    st.subheader(i18n.t("coach_tab_title", coach_ui_lang))
+    analyzed_result = st.session_state.get("analyzed_result")
+    pitch_context = None
+
+    if isinstance(analyzed_result, dict):
+        pitch_metrics = {}
+        for source_key, context_key in (
+            ("pitch_type", "pitch_type"),
+            ("speed_kmh", "speed_kmh"),
+            ("flight_time", "flight_time_s"),
+            ("extension", "extension_m"),
+            ("pitch_distance", "pitch_distance_m"),
+        ):
+            value = analyzed_result.get(source_key)
+            if value is not None:
+                if source_key == "pitch_type" and isinstance(value, str):
+                    pitch_metrics[context_key] = value
+                elif source_key != "pitch_type":
+                    try:
+                        number = float(value)
+                    except (TypeError, ValueError):
+                        continue
+                    if np.isfinite(number):
+                        pitch_metrics[context_key] = round(number, 3)
+
+        handedness = analyzed_result.get("left_handed")
+        if isinstance(handedness, (bool, np.bool_)):
+            pitch_metrics["handedness"] = "left" if handedness else "right"
+
+        if pitch_metrics:
+            pitch_context = {"current_pitch": pitch_metrics}
+
+        biomechanics = analyzed_result.get("biomechanics")
+        if isinstance(biomechanics, dict):
+            biomechanics_context = {}
+            for key in ("elbow_angle", "forearm_slot", "lead_knee_angle", "stride_pct"):
+                value = biomechanics.get(key)
+                if value is None:
+                    continue
+                try:
+                    number = float(value)
+                except (TypeError, ValueError):
+                    continue
+                if np.isfinite(number):
+                    biomechanics_context[key] = round(number, 2)
+            if biomechanics_context:
+                if pitch_context is None:
+                    pitch_context = {}
+                pitch_context["current_biomechanics"] = biomechanics_context
+
+        spin_data = analyzed_result.get("spin_data")
+        if isinstance(spin_data, dict):
+            spin_context = {}
+            for key in ("spin_rate_rpm", "gyro_angle_deg", "ivb_cm", "hb_cm"):
+                value = spin_data.get(key)
+                if value is None:
+                    continue
+                try:
+                    number = float(value)
+                except (TypeError, ValueError):
+                    continue
+                if np.isfinite(number):
+                    spin_context[key] = round(number, 2)
+            if spin_context:
+                if pitch_context is None:
+                    pitch_context = {}
+                pitch_context["current_spin_estimates"] = spin_context
+
+    if pitch_context is None:
+        st.info(i18n.t("coach_no_context", coach_ui_lang))
+    else:
+        st.caption(i18n.t("coach_context_caption", coach_ui_lang))
+
+    context_fingerprint = json.dumps(
+        {
+            "video": analyzed_result.get("video") if isinstance(analyzed_result, dict) else None,
+            "context": pitch_context,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        allow_nan=False,
+    )
+    if st.session_state.get("pitch_coach_context_fingerprint") != context_fingerprint:
+        st.session_state["pitch_coach_context_fingerprint"] = context_fingerprint
+        st.session_state["pitch_coach_messages"] = []
+
+    coach_lang_options = {
+        "auto": i18n.t("coach_lang_option_auto", coach_ui_lang),
+        "ja": i18n.t("coach_lang_option_ja", coach_ui_lang),
+        "en": i18n.t("coach_lang_option_en", coach_ui_lang),
+        "zh": i18n.t("coach_lang_option_zh", coach_ui_lang),
+        "ko": i18n.t("coach_lang_option_ko", coach_ui_lang),
+        "es": i18n.t("coach_lang_option_es", coach_ui_lang),
+    }
+    c_opts = list(coach_lang_options.keys())
+    cur_sel = st.session_state.get("pitch_coach_language_select", "auto")
+    cur_idx = c_opts.index(cur_sel) if cur_sel in c_opts else 0
+    coach_selected_lang = st.selectbox(
+        i18n.t("coach_lang_select_label", coach_ui_lang),
+        options=c_opts,
+        format_func=lambda code: coach_lang_options[code],
+        index=cur_idx,
+        key="pitch_coach_language_select",
+    )
+    messages = st.session_state.setdefault("pitch_coach_messages", [])
+    if messages:
+        hc1, hc2 = st.columns([3, 1])
+        with hc1:
+            st.markdown(f"##### {i18n.t('coach_history_heading', coach_ui_lang)}")
+        with hc2:
+            if st.button(i18n.t("coach_clear_history_btn", coach_ui_lang), key="btn_clear_coach_hist"):
+                st.session_state["pitch_coach_messages"] = []
+                st.rerun()
+        for message in messages:
+            with st.chat_message(message["role"]):
+                st.write(message["content"])
+
+    with st.form("pitch_coach_question_form", clear_on_submit=True):
+        question = st.text_input(
+            i18n.t("coach_question_label", coach_ui_lang),
+            placeholder=i18n.t("coach_question_placeholder", coach_ui_lang),
+        )
+        submitted = st.form_submit_button(i18n.t("coach_submit_btn", coach_ui_lang))
+
+    if submitted:
+        if not question.strip():
+            st.warning(i18n.t("coach_empty_warning", coach_ui_lang))
+        else:
+            history = messages[-8:]
+            messages.append({"role": "user", "content": question})
+            with st.chat_message("user"):
+                st.write(question)
+            with st.chat_message("assistant"):
+                with st.spinner(i18n.t("coach_spinner", coach_ui_lang)):
+                    result = aws_utils.generate_bedrock_conversation_response(
+                        question,
+                        pitch_context,
+                        history=history,
+                        language=coach_selected_lang,
+                    )
+                if (
+                    result.success
+                    and isinstance(result.feedback, dict)
+                    and isinstance(result.feedback.get("response"), str)
+                ):
+                    answer = result.feedback["response"]
+                    messages.append({"role": "assistant", "content": answer})
+                    st.write(answer)
+                    if getattr(result, "stop_reason", None) == "max_tokens":
+                        st.caption(i18n.t("coach_token_limit_warning", coach_ui_lang))
+                else:
+                    st.error(i18n.t("coach_error_default", coach_ui_lang))

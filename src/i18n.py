@@ -1580,13 +1580,176 @@ TRANSLATIONS = {
     },
 
 
+    # --- AIピッチングコーチ (AI Pitching Coach) ---
+    "coach_tab_title": {
+        "ja": "AIピッチングコーチ",
+        "en": "AI Pitching Coach",
+        "es": "Entrenador de Pitcheo IA",
+        "ko": "AI 피칭 코치",
+        "zh": "AI投球教练",
+    },
+    "coach_no_context": {
+        "ja": "投球解析データはまだありません。解析後は利用可能な指標を使って質問に回答します。",
+        "en": "No pitch analysis data available yet. After analysis, available metrics will be used to answer your questions.",
+        "es": "Aún no hay datos de análisis de pitcheo. Tras el análisis, se usarán las métricas disponibles para responder sus preguntas.",
+        "ko": "투구 분석 데이터가 아직 없습니다. 분석 후 사용 가능한 지표를 활용하여 질문에 답변합니다.",
+        "zh": "尚无可用的投球分析数据。分析完成后，将使用可用的指标来回答您的疑问。",
+    },
+    "coach_context_caption": {
+        "ja": "計算済みの投球指標のみを利用します。動画や姿勢座標は送信しません。",
+        "en": "Uses only computed pitch metrics. Raw video and pose coordinates are not transmitted.",
+        "es": "Solo se utilizan las métricas de pitcheo calculadas. No se transmiten videos originales ni coordenadas de postura.",
+        "ko": "계산된 투구 지표만 활용합니다. 원본 영상이나 자세 좌표는 전송되지 않습니다.",
+        "zh": "仅使用已计算的投球指标，不会上传原始视频或姿态坐标。",
+    },
+    "coach_lang_select_label": {
+        "ja": "回答言語",
+        "en": "Response Language",
+        "es": "Idioma de Respuesta",
+        "ko": "답변 언어",
+        "zh": "回答语言",
+    },
+    "coach_lang_option_auto": {
+        "ja": "🌐 自動判定",
+        "en": "🌐 Auto-detect",
+        "es": "🌐 Detección automática",
+        "ko": "🌐 자동 감지",
+        "zh": "🌐 自动检测",
+    },
+    "coach_lang_option_ja": {
+        "ja": "🇯🇵 日本語",
+        "en": "🇯🇵 Japanese",
+        "es": "🇯🇵 Japonés",
+        "ko": "🇯🇵 일본어",
+        "zh": "🇯🇵 日语",
+    },
+    "coach_lang_option_en": {
+        "ja": "🇺🇸 英語",
+        "en": "🇺🇸 English",
+        "es": "🇺🇸 Inglés",
+        "ko": "🇺🇸 영어",
+        "zh": "🇺🇸 英语",
+    },
+    "coach_lang_option_zh": {
+        "ja": "🇨🇳 中国語（簡体字）",
+        "en": "🇨🇳 Chinese (Simplified)",
+        "es": "🇨🇳 Chino (simplificado)",
+        "ko": "🇨🇳 중국어 (간체)",
+        "zh": "🇨🇳 中文（简体）",
+    },
+    "coach_lang_option_ko": {
+        "ja": "🇰🇷 韓国語",
+        "en": "🇰🇷 Korean",
+        "es": "🇰🇷 Coreano",
+        "ko": "🇰🇷 한국어",
+        "zh": "🇰🇷 韩语",
+    },
+    "coach_lang_option_es": {
+        "ja": "🇪🇸 スペイン語",
+        "en": "🇪🇸 Spanish",
+        "es": "🇪🇸 Español",
+        "ko": "🇪🇸 스페인어",
+        "zh": "🇪🇸 西班牙语",
+    },
+    "coach_history_heading": {
+        "ja": "💬 会話履歴",
+        "en": "💬 Conversation History",
+        "es": "💬 Historial de Conversación",
+        "ko": "💬 대화 기록",
+        "zh": "💬 对话记录",
+    },
+    "coach_clear_history_btn": {
+        "ja": "🗑️ 会話履歴をクリア",
+        "en": "🗑️ Clear History",
+        "es": "🗑️ Borrar Historial",
+        "ko": "🗑️ 대화 기록 지우기",
+        "zh": "🗑️ 清除对话记录",
+    },
+    "coach_question_label": {
+        "ja": "質問",
+        "en": "Question",
+        "es": "Pregunta",
+        "ko": "질문",
+        "zh": "提问",
+    },
+    "coach_question_placeholder": {
+        "ja": "例: 球速を上げるには、どんな点を意識できますか？",
+        "en": "e.g., What should I focus on to increase pitch velocity?",
+        "es": "Ej.: ¿En qué aspectos debo enfocarme para aumentar la velocidad?",
+        "ko": "예: 구속을 올리기 위해 어떤 점에 신경 써야 하나요?",
+        "zh": "例如: 要提高球速，我应该注意哪些要点？",
+    },
+    "coach_submit_btn": {
+        "ja": "送信",
+        "en": "Send",
+        "es": "Enviar",
+        "ko": "전송",
+        "zh": "发送",
+    },
+    "coach_empty_warning": {
+        "ja": "質問を入力してください。",
+        "en": "Please enter a question.",
+        "es": "Por favor, introduzca una pregunta.",
+        "ko": "질문을 입력해 주세요.",
+        "zh": "请输入您的问题。",
+    },
+    "coach_spinner": {
+        "ja": "Amazon Bedrockに質問しています…",
+        "en": "Asking Amazon Bedrock...",
+        "es": "Consultando a Amazon Bedrock…",
+        "ko": "Amazon Bedrock에 질문하는 중…",
+        "zh": "正在向 Amazon Bedrock 提问…",
+    },
+    "coach_token_limit_warning": {
+        "ja": "⚠️ 回答が最大トークン数に達したため、途中で終了した可能性があります。",
+        "en": "⚠️ The response may have ended prematurely because it reached the maximum token limit.",
+        "es": "⚠️ La respuesta puede haber terminado de forma incompleta al alcanzar el límite de tokens.",
+        "ko": "⚠️ 답변이 최대 토큰 수에 도달하여 중간에 종료되었을 수 있습니다.",
+        "zh": "⚠️ 回答已达到最大令牌(Token)上限，可能未能完整结束。",
+    },
+    "coach_error_default": {
+        "ja": "Bedrockから回答を取得できませんでした。",
+        "en": "Could not retrieve a response from Bedrock.",
+        "es": "No se pudo obtener una respuesta de Bedrock.",
+        "ko": "Bedrock에서 답변을 가져올 수 없습니다.",
+        "zh": "未能从 Bedrock 获取回答。",
+    },
+
+}
+
+
+# 安全フォールバック辞書（万が一キーが見つからない場合でも英字キーの露出を防止）
+_SAFE_FALLBACKS = {
+    "coach_tab_title": {"ja": "AIピッチングコーチ", "en": "AI Pitching Coach", "es": "Entrenador de Pitcheo IA", "ko": "AI 피칭 코치", "zh": "AI投球教练"},
+    "coach_no_context": {"ja": "投球解析データはまだありません。解析後は利用可能な指標を使って質問に回答します。", "en": "No pitch analysis data available yet. After analysis, available metrics will be used to answer your questions.", "es": "Aún no hay datos de análisis de pitcheo.", "ko": "투구 분석 데이터가 아직 없습니다.", "zh": "尚无可用的投球分析数据。"},
+    "coach_context_caption": {"ja": "計算済みの投球指標のみを利用します。動画や姿勢座標は送信しません。", "en": "Uses only computed pitch metrics. Raw video and pose coordinates are not transmitted.", "es": "Solo se utilizan las métricas de pitcheo calculadas.", "ko": "계산된 투구 지표만 활용합니다.", "zh": "仅使用已计算的投球指标。"},
+    "coach_lang_select_label": {"ja": "回答言語", "en": "Response Language", "es": "Idioma de Respuesta", "ko": "답변 언어", "zh": "回答语言"},
+    "coach_lang_option_auto": {"ja": "🌐 自動判定", "en": "🌐 Auto-detect", "es": "🌐 Detección automática", "ko": "🌐 자동 감지", "zh": "🌐 自动检测"},
+    "coach_lang_option_ja": {"ja": "🇯🇵 日本語", "en": "🇯🇵 Japanese", "es": "🇯🇵 Japonés", "ko": "🇯🇵 일본어", "zh": "🇯🇵 日语"},
+    "coach_lang_option_en": {"ja": "🇺🇸 英語", "en": "🇺🇸 English", "es": "🇺🇸 Inglés", "ko": "🇺🇸 영어", "zh": "🇺🇸 英语"},
+    "coach_lang_option_zh": {"ja": "🇨🇳 中国語（簡体字）", "en": "🇨🇳 Chinese (Simplified)", "es": "🇨🇳 Chino (simplificado)", "ko": "🇨🇳 중국어 (간체)", "zh": "🇨🇳 中文（简体）"},
+    "coach_lang_option_ko": {"ja": "🇰🇷 韓国語", "en": "🇰🇷 Korean", "es": "🇰🇷 Coreano", "ko": "🇰🇷 한국어", "zh": "🇰🇷 韩语"},
+    "coach_lang_option_es": {"ja": "🇪🇸 スペイン語", "en": "🇪🇸 Spanish", "es": "🇪🇸 Español", "ko": "🇪🇸 스페인어", "zh": "🇪🇸 西班牙语"},
+    "coach_history_heading": {"ja": "💬 会話履歴", "en": "💬 Conversation History", "es": "💬 Historial de Conversación", "ko": "💬 대화 기록", "zh": "💬 对话记录"},
+    "coach_clear_history_btn": {"ja": "🗑️ 会話履歴をクリア", "en": "🗑️ Clear History", "es": "🗑️ Borrar Historial", "ko": "🗑️ 대화 기록 지우기", "zh": "🗑️ 清除对话记录"},
+    "coach_question_label": {"ja": "質問", "en": "Question", "es": "Pregunta", "ko": "질문", "zh": "提问"},
+    "coach_question_placeholder": {"ja": "例: 球速を上げるには、どんな点を意識できますか？", "en": "e.g., What should I focus on to increase pitch velocity?", "es": "Ej.: ¿En qué aspectos debo enfocarme para aumentar la velocidad?", "ko": "예: 구속을 올리기 위해 어떤 점에 신경 써야 하나요?", "zh": "例如: 要提高球速，我应该注意哪些要点？"},
+    "coach_submit_btn": {"ja": "送信", "en": "Send", "es": "Enviar", "ko": "전송", "zh": "发送"},
+    "coach_empty_warning": {"ja": "質問を入力してください。", "en": "Please enter a question.", "es": "Por favor, introduzca una pregunta.", "ko": "질문을 입력해 주세요.", "zh": "请输入您的问题。"},
+    "coach_spinner": {"ja": "Amazon Bedrockに質問しています…", "en": "Asking Amazon Bedrock...", "es": "Consultando a Amazon Bedrock…", "ko": "Amazon Bedrock에 질문하는 중…", "zh": "正在向 Amazon Bedrock 提问…"},
+    "coach_token_limit_warning": {"ja": "⚠️ 回答が最大トークン数に達したため、途中で終了した可能性があります。", "en": "⚠️ The response may have ended prematurely because it reached the maximum token limit.", "es": "⚠️ La respuesta puede haber terminado de forma incompleta.", "ko": "⚠️ 답변이 최대 토큰 수에 도달했습니다.", "zh": "⚠️ 回答已达到最大令牌(Token)上限。"},
+    "coach_error_default": {"ja": "Bedrockから回答を取得できませんでした。", "en": "Could not retrieve a response from Bedrock.", "es": "No se pudo obtener una respuesta de Bedrock.", "ko": "Bedrock에서 답변을 가져올 수 없습니다.", "zh": "未能从 Bedrock 获取回答。"},
 }
 
 
 def t(key: str, lang: str = "ja", **kwargs) -> str:
     """翻訳キーから指定言語のテキストを取得し、フォーマットして返す。"""
-    entry = TRANSLATIONS.get(key, {})
+    entry = TRANSLATIONS.get(key)
+    if not entry:
+        entry = _SAFE_FALLBACKS.get(key, {})
     val = entry.get(lang, entry.get("ja", key))
+    if val == key and key in _SAFE_FALLBACKS:
+        val = _SAFE_FALLBACKS[key].get(lang, _SAFE_FALLBACKS[key].get("ja", key))
     if kwargs:
         try:
             return val.format(**kwargs)
