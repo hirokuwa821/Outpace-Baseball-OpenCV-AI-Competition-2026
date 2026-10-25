@@ -11,6 +11,7 @@ import plotly.express as px
 import cv2
 import os
 import sys
+import logging
 from pathlib import Path
 import datetime
 import secrets
@@ -32,6 +33,28 @@ VIDEOS_DIR = ROOT_DIR / "videos"
 OUTPUT_DIR = ROOT_DIR / "output"
 HISTORY_FILE = OUTPUT_DIR / "analysis_history.csv"
 CONFIG_FILE = ROOT_DIR / "config.yaml"
+
+def get_ball_tracking_path(video_name):
+    measured_tracking = pitch_mod.INPUT_DIR / f"{video_name}_tracking.csv"
+    output_tracking = OUTPUT_DIR / f"{video_name}_tracking.csv"
+    if measured_tracking.exists():
+        if output_tracking.exists():
+            logging.info(
+                "Both measured and interpolated tracking CSVs exist for %s; using measured data: %s",
+                video_name,
+                measured_tracking,
+            )
+        return measured_tracking
+    if output_tracking.exists():
+        return output_tracking
+    return measured_tracking
+
+DEFAULT_PITCH_TYPES = {
+    "pitch_102_1": "fastball",
+    "pitch_98_1": "slider",
+    "pitch_98_2": "curve",
+    "pitch_00015_80": "twoseam",
+}
 
 # 言語の初期化
 if "lang" not in st.session_state:
@@ -320,7 +343,7 @@ def run_analysis(video, left_handed, release_frame=None, net_frame=None, pitcher
 
     kp_df = pitch_logic.get_keypoints_for_video(video, release_frame=release_frame)
 
-    ball_csv = pitch_mod.INPUT_DIR / f"{video}_tracking.csv"
+    ball_csv = get_ball_tracking_path(video)
     if ball_csv.exists():
         raw_ball_df = pd.read_csv(ball_csv)
         rows = pitch_mod.load_ball_csv(ball_csv)
@@ -333,6 +356,11 @@ def run_analysis(video, left_handed, release_frame=None, net_frame=None, pitcher
     if ball_df is not None and len(ball_df) >= 2 and len(rows) >= 2:
         frames = np.array([r["frame"] for r in rows])
         times = np.array([r["time_sec"] for r in rows])
+        time_model = np.poly1d(np.polyfit(frames, times, 1))
+        flight_time = max(0.01, float(time_model(net_frame) - time_model(release_frame)))
+    elif ball_df is not None and len(ball_df) >= 2 and {"frame", "time_sec"}.issubset(ball_df.columns):
+        frames = ball_df["frame"].to_numpy(dtype=float)
+        times = ball_df["time_sec"].to_numpy(dtype=float)
         time_model = np.poly1d(np.polyfit(frames, times, 1))
         flight_time = max(0.01, float(time_model(net_frame) - time_model(release_frame)))
     else:
@@ -1298,12 +1326,6 @@ if "analyzed_result" in st.session_state and st.session_state["analyzed_result"]
 
                     # 選択された全投球の3D弾道データを構築
                     pitches_data = []
-                    default_pitch_types = {
-                        "pitch_102_1": "fastball",
-                        "pitch_98_1": "slider",
-                        "pitch_98_2": "curve",
-                        "pitch_00015_80": "twoseam",
-                    }
                     for v_name in sel_compare_pitches:
                         if v_name == video:
                             p_bdf = ball_df
@@ -1315,12 +1337,12 @@ if "analyzed_result" in st.session_state and st.session_state["analyzed_result"]
                             p_left = left_handed
                             p_pt = selected_pitch_type
                         else:
-                            b_csv = pitch_mod.INPUT_DIR / f"{v_name}_tracking.csv"
+                            b_csv = get_ball_tracking_path(v_name)
                             p_bdf = pd.read_csv(b_csv) if b_csv.exists() else None
                             p_rel, p_net = pitch_mod.BASE_FRAMES.get(v_name, (50, 70))
                             p_h = pitch_logic.estimate_pitcher_height(v_name) / 100.0
                             p_left = pitch_mod.HANDEDNESS.get(v_name, True)
-                            p_pt = default_pitch_types.get(v_name, "fastball")
+                            p_pt = DEFAULT_PITCH_TYPES.get(v_name, "fastball")
                             if v_name == "pitch_00015_80":
                                 p_spd = 142.9
                                 p_ext = 1.95
@@ -1558,8 +1580,10 @@ if "analyzed_result" in st.session_state and st.session_state["analyzed_result"]
             h_b = pitch_logic.estimate_pitcher_height(vid_b) / 100.0
             hand_a = left_handed if vid_a == selected_video else pitch_mod.HANDEDNESS.get(vid_a, True)
             hand_b = left_handed if vid_b == selected_video else pitch_mod.HANDEDNESS.get(vid_b, True)
-            res_a = run_analysis(vid_a, hand_a, pitcher_height_m=h_a)
-            res_b = run_analysis(vid_b, hand_b, pitcher_height_m=h_b)
+            pitch_type_a = selected_pitch_type if vid_a == selected_video else DEFAULT_PITCH_TYPES.get(vid_a, "fastball")
+            pitch_type_b = selected_pitch_type if vid_b == selected_video else DEFAULT_PITCH_TYPES.get(vid_b, "fastball")
+            res_a = run_analysis(vid_a, hand_a, pitcher_height_m=h_a, pitch_type=pitch_type_a)
+            res_b = run_analysis(vid_b, hand_b, pitcher_height_m=h_b, pitch_type=pitch_type_b)
 
             fb_a = pitch_logic.generate_ai_feedback(res_a['biomechanics'], res_a['speed_kmh'], res_a['extension'], lang=lang)
             fb_b = pitch_logic.generate_ai_feedback(res_b['biomechanics'], res_b['speed_kmh'], res_b['extension'], lang=lang)

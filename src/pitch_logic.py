@@ -1042,11 +1042,9 @@ def calculate_unified_pitch_trajectory(
     net_frame: int = 70,
     pitch_type: str = "fastball",
     n_pts: int = 60,
+    release_frame: int = None,
 ) -> tuple:
-    """Statcast 3D弾道およびピッチトンネル3Dで完全に一致する統一弾道物理計算。
-    左投手(Left-handed): リリース X = -0.55m (画面左側 / 左腕リリース)
-    右投手(Right-handed): リリース X = +0.55m (画面右側 / 右腕リリース)
-    """
+    """Statcast 3D弾道とピッチトンネルで共通の投球軌道を計算する。"""
     spd_ms = float(speed_kmh or 140.0) / 3.6
     t_tot = max(0.25, float(flight_time or 0.45))
     ext = float(extension_m or 1.80)
@@ -1067,8 +1065,12 @@ def calculate_unified_pitch_trajectory(
     half_h = 23.0
 
     has_track = False
+    track_x = None
     if ball_df is not None and not ball_df.empty:
-        cand = ball_df[ball_df["frame"] <= net_frame]
+        track_mask = (ball_df["frame"] <= net_frame) & ball_df["cx"].notna()
+        if release_frame is not None:
+            track_mask &= ball_df["frame"] >= release_frame
+        cand = ball_df[track_mask].sort_values("frame").drop_duplicates("frame")
         if not cand.empty:
             last_pt = cand.iloc[-1]
             cx, cy = float(last_pt["cx"]), float(last_pt["cy"])
@@ -1076,6 +1078,30 @@ def calculate_unified_pitch_trajectory(
             norm_y = (y_center - cy) / half_h
             ball_y_norm = float(np.clip(2.0 + norm_y, 0.2, 3.8))
             has_track = True
+            if len(cand) >= 2 and "frame" in cand.columns:
+                frames = cand["frame"].to_numpy(dtype=float)
+                pixels_x = cand["cx"].to_numpy(dtype=float)
+                release_fr = float(release_frame) if release_frame is not None else frames[0] - 1.0
+                net_fr = float(net_frame)
+                first_count = min(5, len(cand))
+                last_count = min(5, len(cand))
+                release_px = float(np.polyval(np.polyfit(frames[:first_count], pixels_x[:first_count], 1), release_fr))
+                net_px = float(np.polyval(np.polyfit(frames[-last_count:], pixels_x[-last_count:], 1), net_fr))
+                track_frames = np.concatenate(([release_fr], frames, [net_fr]))
+                track_pixels_x = np.concatenate(([release_px], pixels_x, [net_px]))
+                order = np.argsort(track_frames)
+                track_frames = track_frames[order]
+                track_pixels_x = track_pixels_x[order]
+                unique_frames, unique_indices = np.unique(track_frames, return_index=True)
+                track_progress = (unique_frames - release_fr) / max(1.0, net_fr - release_fr)
+                track_x = x_rel + (
+                    track_pixels_x[unique_indices] - release_px
+                ) * (sz_w / half_w)
+                track_x = np.interp(
+                    np.linspace(0.0, 1.0, n_pts),
+                    track_progress,
+                    track_x,
+                )
 
     if has_track:
         x_plate = ball_x_norm * sz_w
@@ -1096,6 +1122,9 @@ def calculate_unified_pitch_trajectory(
     grav_drop = 0.5 * g * (t_s ** 2)
     lift_correction = (z_plate - (z_rel - 0.5 * g * (t_tot ** 2))) * mag_profile
     traj_z = z_rel - grav_drop + lift_correction
+    if track_x is not None:
+        traj_x = np.clip(track_x, -1.8, 1.8)
+        x_plate = float(traj_x[-1])
 
     return traj_x, traj_y, traj_z, x_rel, y_rel, z_rel, x_plate, z_plate
 
@@ -1269,6 +1298,7 @@ def generate_statcast_3d_figure(
             net_frame=int(p.get("net_frame", 70)),
             pitch_type=pt_key,
             n_pts=60,
+            release_frame=int(p.get("release_frame", 50)),
         )
 
         # 弾道ライン (球種カラー)
@@ -2363,6 +2393,7 @@ def generate_pitch_tunnel_figure(
         net_frame=int(res_a.get("net_frame", 70)),
         pitch_type=res_a.get("pitch_type", "fastball"),
         n_pts=60,
+        release_frame=int(res_a.get("release_frame", 50)),
     )
     xb, yb, zb, x0_b, y0_b, z0_b, xp_b, zp_b = calculate_unified_pitch_trajectory(
         speed_kmh=res_b.get("speed_kmh", 140.0),
@@ -2376,12 +2407,19 @@ def generate_pitch_tunnel_figure(
         net_frame=int(res_b.get("net_frame", 70)),
         pitch_type=res_b.get("pitch_type", "fastball"),
         n_pts=60,
+        release_frame=int(res_b.get("release_frame", 50)),
     )
 
-    idx_a = np.argmin(np.abs(ya - 7.2))
-    idx_b = np.argmin(np.abs(yb - 7.2))
-    pt_commit_a = np.array([xa[idx_a], ya[idx_a], za[idx_a]])
-    pt_commit_b = np.array([xb[idx_b], yb[idx_b], zb[idx_b]])
+    pt_commit_a = np.array([
+        np.interp(7.2, ya[::-1], xa[::-1]),
+        7.2,
+        np.interp(7.2, ya[::-1], za[::-1]),
+    ])
+    pt_commit_b = np.array([
+        np.interp(7.2, yb[::-1], xb[::-1]),
+        7.2,
+        np.interp(7.2, yb[::-1], zb[::-1]),
+    ])
     dist_commit_cm = np.linalg.norm(pt_commit_a - pt_commit_b) * 100.0
     dist_plate_cm = np.linalg.norm([xa[-1] - xb[-1], za[-1] - zb[-1]]) * 100.0
 
@@ -2403,6 +2441,8 @@ def generate_pitch_tunnel_figure(
     # 多言語ラベルの取得
     pitch_a_lbl = i18n.t("pitch_a", lang)
     pitch_b_lbl = i18n.t("pitch_b", lang)
+    pitch_a_type_lbl = i18n.t(PITCH_BENCHMARKS.get(res_a.get("pitch_type", "fastball"), {}).get("name_key", "pitch_fastball"), lang)
+    pitch_b_type_lbl = i18n.t(PITCH_BENCHMARKS.get(res_b.get("pitch_type", "fastball"), {}).get("name_key", "pitch_fastball"), lang)
     tunnel_zone_lbl = i18n.t("tunnel_zone_name", lang)
     commit_pt_lbl = i18n.t("commit_point_name", lang)
     sz_lbl = i18n.t("strike_zone_name", lang)
@@ -2411,12 +2451,13 @@ def generate_pitch_tunnel_figure(
     fig.add_trace(go.Scatter3d(
         x=xa, y=ya, z=za, mode="lines",
         line=dict(color="#ef4444", width=5.5),
-        name=f"🔴 {pitch_a_lbl} ({res_a.get('video', 'Pitch A')})",
+        name=f"🔴 {pitch_a_lbl} - {pitch_a_type_lbl} ({res_a.get('video', 'Pitch A')})",
     ))
     fig.add_trace(go.Scatter3d(
-        x=xb, y=yb, z=zb, mode="lines",
-        line=dict(color="#3b82f6", width=5.5),
-        name=f"🔵 {pitch_b_lbl} ({res_b.get('video', 'Pitch B')})",
+        x=xb, y=yb, z=zb, mode="lines+markers",
+        line=dict(color="#3b82f6", width=5.5, dash="dash"),
+        marker=dict(size=2.5, color="#3b82f6"),
+        name=f"🔵 {pitch_b_lbl} - {pitch_b_type_lbl} ({res_b.get('video', 'Pitch B')})",
     ))
 
     # トンネル円筒（y >= 7.2m）
@@ -2655,4 +2696,3 @@ def generate_broadcast_card(
     buf = io.BytesIO()
     card.save(buf, format="PNG")
     return buf.getvalue()
-
