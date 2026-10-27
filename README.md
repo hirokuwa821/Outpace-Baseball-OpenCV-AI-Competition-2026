@@ -79,7 +79,19 @@ Never put AWS access keys, secret keys, session tokens, or other credentials in 
 
 Pinned Python dependencies are listed in [`requirements.txt`](requirements.txt).
 
-## 8. Installation and Setup on Windows
+## 8. Installation and Setup
+
+### On Linux / macOS
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install --upgrade pip
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+pip install --extra-index-url https://download.pytorch.org/whl/cpu -r requirements.txt
+```
+
+### On Windows (PowerShell)
 
 Open PowerShell in the project directory. The commands below use the existing `requirements.txt` and create a project-local virtual environment:
 
@@ -87,48 +99,75 @@ Open PowerShell in the project directory. The commands below use the existing `r
 py -3.12 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
-python -m pip install -r requirements.txt
+python -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+python -m pip install --extra-index-url https://download.pytorch.org/whl/cpu -r requirements.txt
 ```
 
 If PowerShell blocks activation due to the current execution policy, use the virtual environment's Python directly:
 
 ```powershell
 .\.venv\Scripts\python.exe -m pip install --upgrade pip
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+.\.venv\Scripts\python.exe -m pip install --extra-index-url https://download.pytorch.org/whl/cpu -r requirements.txt
 ```
 
 The project expects `yolo11n-pose.pt` at the repository root (it is included in this project). For useful analysis, provide compatible videos and any required tracking/keypoint inputs in the expected local directories; sample videos and existing analysis data are not part of the Python package installation.
 
-### Optional S3 setup
+### Optional S3 Setup
 
-Configure AWS credentials outside the repository, for example with a local AWS CLI profile or an IAM role. Then, in PowerShell, set the bucket and optionally the region for the current terminal session:
+Configure AWS credentials outside the repository, for example with a local AWS CLI profile or an IAM role. Then, set the bucket and optionally the region for the current session:
 
+```bash
+export AWS_S3_BUCKET_NAME="your-bucket-name"
+export AWS_DEFAULT_REGION="your-aws-region"
+```
+
+In PowerShell:
 ```powershell
 $env:AWS_S3_BUCKET_NAME = "your-bucket-name"
 $env:AWS_DEFAULT_REGION = "your-aws-region"
-# Optional when using a named local AWS profile:
-$env:AWS_PROFILE = "your-profile-name"
 ```
 
-Do not replace these values with access keys or secrets, and do not commit credential files. Without a configured bucket, local video analysis can proceed without the S3 upload.
+Without a configured bucket, local video analysis proceeds without S3 upload.
 
 ## 9. How to Run the App
 
 With the virtual environment active, run:
 
-```powershell
+```bash
 streamlit run src/app.py
 ```
 
-Alternatively, call Streamlit through the virtual environment directly:
+### Running with Docker
 
-```powershell
-.\.venv\Scripts\python.exe -m streamlit run src/app.py
+```bash
+docker build -t outpace .
+docker run -p 8501:8501 -e AWS_S3_BUCKET_NAME="your-bucket" -e AWS_DEFAULT_REGION="your-region" outpace
 ```
 
-Streamlit prints the local address to open in a browser. The project code and configuration inspected for this README do not confirm a public deployment.
+Access the app at `http://localhost:8501`.
 
-## 10. Project Structure
+### Running Tests
+
+Run the full automated test suite:
+
+```bash
+python -m unittest discover tests
+```
+
+Run the standalone physics smoke test:
+
+```bash
+python src/pitch_speed_v23_auto_distance.py
+```
+
+## 10. AWS Cloud Deployment (EC2 + Docker)
+
+For complete step-by-step instructions on deploying the application to an **Amazon EC2** instance with automated S3 sync and Amazon Bedrock AI coaching via an IAM instance role, see:
+
+👉 **[AWS Deployment Guide (`docs/DEPLOY_AWS.md`)](docs/DEPLOY_AWS.md)**
+
+## 11. Project Structure
 
 ```text
 .
@@ -154,7 +193,7 @@ Streamlit prints the local address to open in a browser. The project code and co
 
 Some files and directories, such as `videos/` and `output/`, are local working data and may need to be created or populated for a particular analysis.
 
-## 11. Limitations and Future Improvements
+## 12. Limitations and Future Improvements
 
 ### Current limitations
 
