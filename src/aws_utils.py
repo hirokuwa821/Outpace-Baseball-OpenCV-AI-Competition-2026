@@ -451,8 +451,10 @@ def generate_bedrock_conversation_response(
             raise BedrockRegionNotConfiguredError()
 
         max_tokens = get_bedrock_max_tokens()
+        model_id = get_bedrock_model_id(region)
+        _logger.info("Calling Amazon Bedrock converse API (modelId=%s, region=%s)", model_id, region)
         response = session.client("bedrock-runtime", region_name=region).converse(
-            modelId=get_bedrock_model_id(region),
+            modelId=model_id,
             system=[{"text": system_prompt}],
             messages=messages,
             inferenceConfig={"maxTokens": max_tokens, "temperature": 0.4},

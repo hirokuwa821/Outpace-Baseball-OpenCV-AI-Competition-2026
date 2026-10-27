@@ -17,6 +17,13 @@ import datetime
 import secrets
 import json
 
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    stream=sys.stdout,
+)
+logger = logging.getLogger("outpace.app")
+
 # --- パス設定とインポート ---
 sys.path.append(str(Path(__file__).parent))
 import streamlit.components.v1 as components
@@ -356,6 +363,11 @@ def run_analysis(video, left_handed, release_frame=None, net_frame=None, pitcher
             net_frame = 70
 
     kp_df = pitch_logic.get_keypoints_for_video(video, release_frame=release_frame)
+    if kp_df is None or kp_df.empty:
+        return {
+            "error": "no_person_detected",
+            "message": f"No person keypoints detected in '{video}'. Please ensure the pitcher is visible in the video.",
+        }
 
     ball_csv = get_ball_tracking_path(
         video, release_frame=release_frame, net_frame=net_frame
@@ -393,6 +405,11 @@ def run_analysis(video, left_handed, release_frame=None, net_frame=None, pitcher
         y_plate, y_foot = pitch_mod.get_foot_coordinates(
             kp_df, release_frame, video, is_left_handed=left_handed, auto_detect=True
         )
+        if y_plate is None or y_foot is None:
+            return {
+                "error": "foot_coordinates_missing",
+                "message": f"Unable to detect pitcher foot positions at release for '{video}'. Check camera angle and foot visibility.",
+            }
         pitch_distance, extension = pitch_mod.calculate_dynamic_distance(
             y_plate, y_net, y_foot, pitch_mod.TOTAL_FIELD_DISTANCE_M, video
         )
@@ -678,11 +695,22 @@ with st.sidebar:
         if st.button(i18n.t("upload_btn", lang), width="stretch"):
             with st.spinner("Saving video..."):
                 new_name = pitch_logic.save_uploaded_video(uploaded_file)
-                aws_utils.upload_file_to_s3(
-                    VIDEOS_DIR / f"{new_name}.mp4",
-                    f"videos/{new_name}.mp4",
-                )
                 st.success(i18n.t("upload_success", lang, name=new_name))
+                s3_key = f"videos/{new_name}.mp4"
+                s3_bucket = os.getenv("AWS_S3_BUCKET_NAME")
+                if s3_bucket:
+                    upload_ok = aws_utils.upload_file_to_s3(
+                        VIDEOS_DIR / f"{new_name}.mp4",
+                        s3_key,
+                    )
+                    if upload_ok:
+                        st.info(f"Uploaded to S3: s3://{s3_bucket}/{s3_key}")
+                        logger.info("Video %s successfully uploaded to s3://%s/%s", new_name, s3_bucket, s3_key)
+                    else:
+                        st.warning("S3 upload failed; the video was saved locally only.")
+                        logger.warning("Failed to upload video %s to s3://%s/%s", new_name, s3_bucket, s3_key)
+                else:
+                    logger.info("Local video %s saved (AWS_S3_BUCKET_NAME not configured)", new_name)
                 # 自動トラッキングをバックグラウンド実行
                 try:
                     pitch_logic.auto_track_new_video(new_name, is_left_handed=left_handed)
@@ -707,6 +735,11 @@ should_run = (
 if should_run:
     with st.spinner(i18n.t("analyzing_spinner", lang)):
         res = run_analysis(selected_video, left_handed, pitcher_height_m=pitcher_height_m, pitch_type=selected_pitch_type)
+        if not res or res.get("error"):
+            err_msg = res.get("message", "Analysis failed.") if res else "Analysis failed."
+            st.error(f"⚠️ {err_msg}")
+            st.session_state["analyzed_result"] = None
+            st.stop()
         skel_video_path = pitch_logic.create_skeleton_video(
             selected_video,
             res["kp_df"],
@@ -1613,6 +1646,12 @@ if "analyzed_result" in st.session_state and st.session_state["analyzed_result"]
             res_a = run_analysis(vid_a, hand_a, pitcher_height_m=h_a, pitch_type=pitch_type_a)
             res_b = run_analysis(vid_b, hand_b, pitcher_height_m=h_b, pitch_type=pitch_type_b)
 
+            if not res_a or res_a.get("error") or not res_b or res_b.get("error"):
+                msg_a = res_a.get("message") if (res_a and res_a.get("error")) else ""
+                msg_b = res_b.get("message") if (res_b and res_b.get("error")) else ""
+                st.error(f"⚠️ Comparison failed: {msg_a or msg_b or 'Analysis failed for one of the pitches.'}")
+                st.stop()
+
             fb_a = pitch_logic.generate_ai_feedback(res_a['biomechanics'], res_a['speed_kmh'], res_a['extension'], lang=lang)
             fb_b = pitch_logic.generate_ai_feedback(res_b['biomechanics'], res_b['speed_kmh'], res_b['extension'], lang=lang)
 
@@ -2125,6 +2164,7 @@ with tab_coach:
                 st.write(question)
             with st.chat_message("assistant"):
                 with st.spinner(i18n.t("coach_spinner", coach_ui_lang)):
+                    logger.info("Sending Bedrock conversation request (lang=%s)", coach_selected_lang)
                     result = aws_utils.generate_bedrock_conversation_response(
                         question,
                         pitch_context,
@@ -2136,10 +2176,12 @@ with tab_coach:
                     and isinstance(result.feedback, dict)
                     and isinstance(result.feedback.get("response"), str)
                 ):
+                    logger.info("Bedrock coaching response received successfully")
                     answer = result.feedback["response"]
                     messages.append({"role": "assistant", "content": answer})
                     st.write(answer)
                     if getattr(result, "stop_reason", None) == "max_tokens":
                         st.caption(i18n.t("coach_token_limit_warning", coach_ui_lang))
                 else:
+                    logger.warning("Bedrock conversation request failed: %s", getattr(result, "message", "unknown"))
                     st.error(i18n.t("coach_error_default", coach_ui_lang))
