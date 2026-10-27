@@ -1,6 +1,8 @@
 import subprocess
 from pathlib import Path
 import datetime
+import hashlib
+import json
 import cv2
 import numpy as np
 import pandas as pd
@@ -535,86 +537,399 @@ def get_keypoints_for_video(video_name: str, release_frame: int = None, force_re
     return df
 
 
-def draw_ball_trajectory(frame_img, ball_df, end_frame=None, release_frame=None, net_frame=None, speed_kmh=None):
-    """ボールの飛行軌跡トレーサー（ネオン弾道ライン）を描画。"""
+MAX_TRAJECTORY_GAP_FRAMES = 4
+MIN_BALL_CONFIDENCE = 0.3
+TRAJECTORY_DRAW_VERSION = 2
+BALL_TRACKING_REQUIRED_COLUMNS = ("frame", "cx", "cy")
+
+
+def _tracking_point_is_interpolated(row):
+    """Return whether the CSV explicitly identifies this point as interpolated."""
+    for column in ("is_interpolated", "interpolated"):
+        if column in row.index:
+            value = row[column]
+            if isinstance(value, str):
+                return value.strip().lower() in {"1", "true", "yes", "interpolated", "estimated"}
+            try:
+                if pd.isna(value):
+                    return False
+            except (TypeError, ValueError):
+                pass
+            try:
+                return bool(value)
+            except (TypeError, ValueError):
+                return False
+    return str(row.get("source", "")).strip().lower() in {"interpolated", "estimated"}
+
+
+def _tracking_confidence_is_usable(row, minimum=MIN_BALL_CONFIDENCE):
+    if "confidence" not in row.index:
+        return True
+    value = row.get("confidence")
+    if value is None:
+        return True
+    if isinstance(value, str):
+        if value.strip() == "":
+            return True
+        try:
+            value = float(value)
+        except ValueError:
+            return True
+    try:
+        if pd.isna(value):
+            return True
+    except (TypeError, ValueError):
+        return True
+    try:
+        return float(value) >= minimum
+    except (TypeError, ValueError):
+        return True
+
+
+def _count_valid_tracking_points(ball_df, release_frame=None, net_frame=None):
+    if ball_df is None or getattr(ball_df, "empty", True):
+        return 0
+    if not set(BALL_TRACKING_REQUIRED_COLUMNS).issubset(ball_df.columns):
+        return 0
+    frames = pd.to_numeric(ball_df["frame"], errors="coerce")
+    cx = pd.to_numeric(ball_df["cx"], errors="coerce")
+    cy = pd.to_numeric(ball_df["cy"], errors="coerce")
+    valid = frames.notna() & cx.notna() & cy.notna() & np.isfinite(cx) & np.isfinite(cy)
+    if release_frame is not None:
+        valid = valid & (frames >= release_frame)
+    if net_frame is not None:
+        valid = valid & (frames <= net_frame)
+    if "confidence" in ball_df.columns:
+        confidence = pd.to_numeric(ball_df["confidence"], errors="coerce")
+        valid = valid & (confidence.isna() | (confidence >= MIN_BALL_CONFIDENCE))
+    return int(valid.sum())
+
+
+def _read_valid_ball_tracking_csv(path):
+    if path is None:
+        return None
+    try:
+        path = Path(path)
+        if not path.exists() or path.stat().st_size == 0:
+            return None
+        ball_df = pd.read_csv(path)
+    except Exception:
+        return None
+    if _count_valid_tracking_points(ball_df) < 1:
+        return None
+    return ball_df
+
+
+def is_valid_ball_tracking_csv(path, release_frame=None, net_frame=None):
+    """Return True when the CSV has at least one usable ball position in the pitch window."""
+    ball_df = _read_valid_ball_tracking_csv(path)
+    return ball_df is not None and _count_valid_tracking_points(
+        ball_df, release_frame=release_frame, net_frame=net_frame
+    ) >= 1
+
+
+def load_valid_ball_tracking_csv(path):
+    """Read a tracking CSV, returning None for missing, empty, or malformed data."""
+    return _read_valid_ball_tracking_csv(path)
+
+
+def select_ball_tracking_data(video_name, provided=None, release_frame=None, net_frame=None):
+    """Choose usable tracking data, preferring real measurements over empty files.
+
+    A CSV with at least two valid positions inside the pitch window is required
+    for a trajectory. A single valid position is kept only as a last-resort
+    fallback. CSVs whose frame numbers do not overlap the requested release/net
+    window are ignored so that unrelated or synthetic tracks are not drawn.
+    """
+    candidates = []
+    if provided is not None and _count_valid_tracking_points(
+        provided, release_frame=release_frame, net_frame=net_frame
+    ) >= 1:
+        candidates.append((provided, None))
+
+    for path in (
+        OUTPUT_DIR / "ball_tracking_v5" / f"{video_name}_tracking.csv",
+        OUTPUT_DIR / f"{video_name}_tracking.csv",
+    ):
+        candidate = _read_valid_ball_tracking_csv(path)
+        if candidate is not None and _count_valid_tracking_points(
+            candidate, release_frame=release_frame, net_frame=net_frame
+        ) >= 1:
+            candidates.append((candidate, path))
+
+    fallback = None
+    for candidate, path in candidates:
+        count = _count_valid_tracking_points(
+            candidate, release_frame=release_frame, net_frame=net_frame
+        )
+        if count >= 2:
+            return candidate, path
+        if count == 1 and fallback is None:
+            fallback = (candidate, path)
+
+    return fallback if fallback is not None else (None, None)
+
+
+def _dataframe_signature(df):
+    if df is None or getattr(df, "empty", True):
+        return None
+    try:
+        normalized = df.copy()
+        if "frame" in normalized.columns:
+            frames = pd.to_numeric(normalized["frame"], errors="coerce")
+            if bool(frames.notna().all()):
+                normalized = normalized.assign(frame=frames).sort_values("frame", kind="stable")
+        payload = normalized.to_csv(index=False, lineterminator="\n")
+    except Exception:
+        payload = repr(df)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _skeleton_cache_key(video_path, kp_df, ball_df, release_frame, net_frame, overlay_tracer):
+    try:
+        video_mtime_ns = video_path.stat().st_mtime_ns
+        video_size = video_path.stat().st_size
+    except OSError:
+        video_mtime_ns = None
+        video_size = None
+    payload = {
+        "draw_version": TRAJECTORY_DRAW_VERSION,
+        "video_mtime_ns": video_mtime_ns,
+        "video_size": video_size,
+        "tracking_signature": _dataframe_signature(ball_df),
+        "keypoints_signature": _dataframe_signature(kp_df),
+        "release_frame": release_frame,
+        "net_frame": net_frame,
+        "overlay_tracer": bool(overlay_tracer),
+    }
+    encoded = json.dumps(payload, sort_keys=True, default=str).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest(), payload
+
+
+def _skeleton_meta_path(final_out):
+    return final_out.with_suffix(".meta.json")
+
+
+def _read_skeleton_meta(meta_path):
+    try:
+        return json.loads(meta_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+def _draw_dashed_line(image, start, end, color, thickness=3):
+    length = float(np.hypot(end[0] - start[0], end[1] - start[1]))
+    if length <= 0:
+        return
+    dash_length = 6.0
+    period = 16.0
+    for offset in np.arange(0.0, length, period):
+        fraction_start = offset / length
+        fraction_end = min(offset + dash_length, length) / length
+        dash_start = (
+            int(round(start[0] + (end[0] - start[0]) * fraction_start)),
+            int(round(start[1] + (end[1] - start[1]) * fraction_start)),
+        )
+        dash_end = (
+            int(round(start[0] + (end[0] - start[0]) * fraction_end)),
+            int(round(start[1] + (end[1] - start[1]) * fraction_end)),
+        )
+        cv2.line(image, dash_start, dash_end, color, thickness, cv2.LINE_AA)
+
+
+def draw_ball_trajectory(
+    frame_img,
+    ball_df,
+    end_frame=None,
+    release_frame=None,
+    net_frame=None,
+    speed_kmh=None,
+    source_size=None,
+    target_size=None,
+):
+    """Draw recorded ball positions and a bounded bridge over short gaps.
+
+    ``source_size``/``target_size`` can be supplied when tracking coordinates
+    were measured on a different resolution than the target frame.
+    """
     img = frame_img.copy()
-    if ball_df is None or ball_df.empty:
+    if ball_df is None or ball_df.empty or not set(BALL_TRACKING_REQUIRED_COLUMNS).issubset(ball_df.columns):
         return img
 
-    df = ball_df.copy()
-    if release_frame is not None:
-        df = df[df["frame"] >= release_frame]
-    if end_frame is not None:
-        df = df[df["frame"] <= end_frame]
-    elif net_frame is not None:
-        df = df[df["frame"] <= net_frame]
-
-    pts = []
-    for _, r in df.iterrows():
+    height, width = img.shape[:2]
+    scale_x = 1.0
+    scale_y = 1.0
+    if source_size is not None and target_size is not None:
         try:
-            cx, cy = int(r["cx"]), int(r["cy"])
-            if cx > 0 and cy > 0:
-                pts.append((cx, cy))
-        except Exception:
+            source_w, source_h = float(source_size[0]), float(source_size[1])
+            target_w, target_h = float(target_size[0]), float(target_size[1])
+            if source_w > 0 and source_h > 0 and target_w > 0 and target_h > 0:
+                scale_x = target_w / source_w
+                scale_y = target_h / source_h
+        except (TypeError, ValueError, IndexError):
+            scale_x = 1.0
+            scale_y = 1.0
+
+    points = []
+    for _, row in ball_df.iterrows():
+        try:
+            frame = int(row["frame"])
+            cx = float(row["cx"]) * scale_x
+            cy = float(row["cy"]) * scale_y
+            if not np.isfinite(cx) or not np.isfinite(cy):
+                continue
+            if release_frame is not None and frame < release_frame:
+                continue
+            if end_frame is not None and frame > end_frame:
+                continue
+            if net_frame is not None and frame > net_frame:
+                continue
+            if not (0 <= cx < width and 0 <= cy < height):
+                continue
+            if not _tracking_confidence_is_usable(row):
+                continue
+            points.append((frame, (int(round(cx)), int(round(cy))), _tracking_point_is_interpolated(row)))
+        except (TypeError, ValueError, OverflowError):
             continue
 
-    if len(pts) < 2:
+    points.sort(key=lambda point: point[0])
+    unique_points = {}
+    for point in points:
+        unique_points[point[0]] = point
+    points = list(unique_points.values())
+    if len(points) < 2:
         return img
 
-    # ネオンのグラデーション弾道ライン
-    for i in range(len(pts) - 1):
-        alpha = i / max(len(pts) - 1, 1)
+    for i, (frame, point, interpolated) in enumerate(points):
+        if i + 1 >= len(points):
+            continue
+        next_frame, next_point, next_interpolated = points[i + 1]
+        frame_gap = next_frame - frame
+        if frame_gap <= 0 or frame_gap > MAX_TRAJECTORY_GAP_FRAMES:
+            continue
+
+        alpha = i / max(len(points) - 1, 1)
         color = (int(255 * (1 - 0.5 * alpha)), int(220 * (1 - alpha) + 50 * alpha), int(255 * alpha))
-        cv2.line(img, pts[i], pts[i + 1], color, 4, cv2.LINE_AA)
+        if frame_gap > 1 or interpolated or next_interpolated:
+            _draw_dashed_line(img, point, next_point, color, thickness=1)
+        else:
+            cv2.line(img, point, next_point, color, 4, cv2.LINE_AA)
 
-    # リリース点マーカー
-    cv2.circle(img, pts[0], 8, (0, 255, 255), -1, cv2.LINE_AA)
-    cv2.circle(img, pts[0], 12, (255, 255, 255), 2, cv2.LINE_AA)
+    for _, point, interpolated in points:
+        marker_color = (0, 165, 255) if interpolated else (255, 255, 255)
+        cv2.circle(img, point, 3, marker_color, -1, cv2.LINE_AA)
+
+    release_point = points[0][1]
+    cv2.circle(img, release_point, 8, (0, 255, 255), -1, cv2.LINE_AA)
+    if release_frame is not None:
+        cv2.circle(img, release_point, 12, (255, 255, 255), 2, cv2.LINE_AA)
     lbl = f"Release ({speed_kmh:.1f} km/h)" if speed_kmh else "Release"
-    cv2.putText(img, lbl, (pts[0][0] - 60, pts[0][1] - 15), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 255), 2, cv2.LINE_AA)
+    label_x = max(5, min(width - 160, release_point[0] - 60))
+    label_y = max(20, release_point[1] - 15)
+    cv2.putText(img, lbl, (label_x, label_y), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 255), 2, cv2.LINE_AA)
 
-    # 現在または着弾位置マーカー
-    cur_pt = pts[-1]
+    cur_pt = points[-1][1]
     cv2.circle(img, cur_pt, 7, (0, 0, 255), -1, cv2.LINE_AA)
     cv2.circle(img, cur_pt, 10, (255, 255, 255), 1, cv2.LINE_AA)
 
     return img
 
 
-def create_skeleton_video(video_name: str, kp_df: pd.DataFrame, force_recreate: bool = False, overlay_tracer: bool = True) -> Path:
-    """動画に骨格＋弾道トレーサーを描画し、ブラウザ再生用 H.264 MP4 を生成。"""
+def create_skeleton_video(
+    video_name: str,
+    kp_df: pd.DataFrame,
+    force_recreate: bool = False,
+    overlay_tracer: bool = True,
+    ball_df: pd.DataFrame = None,
+    release_frame: int = None,
+    net_frame: int = None,
+    source_size=None,
+) -> Path:
+    """Render skeleton and ball trajectory overlays into a browser-friendly MP4."""
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     final_out = OUTPUT_DIR / f"skeleton_{video_name}.mp4"
-
-    if final_out.exists() and not force_recreate and final_out.stat().st_size > 0:
-        return final_out
-
     video_path = VIDEOS_DIR / f"{video_name}.mp4"
     if not video_path.exists():
-        raise FileNotFoundError(f"動画が見つかりません: {video_path}")
+        raise FileNotFoundError(f"Video not found: {video_path}")
 
-    ball_csv = OUTPUT_DIR / "ball_tracking_v5" / f"{video_name}_tracking.csv"
-    ball_df = pd.read_csv(ball_csv) if (overlay_tracer and ball_csv.exists()) else None
+    selected_ball_df = None
+    selected_ball_path = None
+    if overlay_tracer:
+        selected_ball_df, selected_ball_path = select_ball_tracking_data(
+            video_name,
+            provided=ball_df,
+            release_frame=release_frame,
+            net_frame=net_frame,
+        )
+
+    cache_key, cache_payload = _skeleton_cache_key(
+        video_path,
+        kp_df,
+        selected_ball_df,
+        release_frame,
+        net_frame,
+        overlay_tracer,
+    )
+    meta_path = _skeleton_meta_path(final_out)
+
+    if final_out.exists() and not force_recreate and final_out.stat().st_size > 0:
+        cached_meta = _read_skeleton_meta(meta_path)
+        if cached_meta is not None and cached_meta.get("cache_key") == cache_key:
+            return final_out
+
+    if source_size is None and selected_ball_df is not None:
+        for width_column, height_column in (
+            ("video_width", "video_height"),
+            ("source_width", "source_height"),
+            ("frame_width", "frame_height"),
+        ):
+            if width_column in selected_ball_df.columns and height_column in selected_ball_df.columns:
+                widths = pd.to_numeric(selected_ball_df[width_column], errors="coerce").dropna()
+                heights = pd.to_numeric(selected_ball_df[height_column], errors="coerce").dropna()
+                if not widths.empty and not heights.empty and widths.iloc[0] > 0 and heights.iloc[0] > 0:
+                    source_size = (float(widths.iloc[0]), float(heights.iloc[0]))
+                    break
 
     raw_temp = OUTPUT_DIR / f"temp_{video_name}_raw.mp4"
     cap = cv2.VideoCapture(str(video_path))
+    if not cap.isOpened():
+        raise OSError(f"Cannot open video: {video_path}")
     fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
     w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     fourcc = cv2.VideoWriter_fourcc(*"mp4v")
     out = cv2.VideoWriter(str(raw_temp), fourcc, fps, (w, h))
+    if not out.isOpened():
+        cap.release()
+        raise OSError(f"Cannot write skeleton video: {raw_temp}")
+
+    kp_by_frame = {}
+    if kp_df is not None and not getattr(kp_df, "empty", True) and "frame" in kp_df.columns:
+        for _, kp_row in kp_df.iterrows():
+            try:
+                kp_by_frame[int(kp_row["frame"])] = kp_row
+            except (TypeError, ValueError, OverflowError):
+                continue
 
     frame_idx = 0
     while cap.isOpened():
         ret, frame = cap.read()
         if not ret:
             break
-        kp_rows = kp_df[kp_df["frame"] == frame_idx]
-        if not kp_rows.empty:
-            frame = draw_skeleton(frame, kp_rows.iloc[0], draw_labels=False)
+        kp_row = kp_by_frame.get(frame_idx)
+        if kp_row is not None:
+            frame = draw_skeleton(frame, kp_row, draw_labels=False)
 
-        if ball_df is not None:
-            frame = draw_ball_trajectory(frame, ball_df, end_frame=frame_idx)
+        if selected_ball_df is not None:
+            frame = draw_ball_trajectory(
+                frame,
+                selected_ball_df,
+                end_frame=frame_idx,
+                release_frame=release_frame,
+                net_frame=net_frame,
+                source_size=source_size,
+                target_size=(w, h),
+            )
 
         out.write(frame)
         frame_idx += 1
@@ -631,6 +946,23 @@ def create_skeleton_video(video_name: str, kp_df: pd.DataFrame, force_recreate: 
         subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         if raw_temp.exists():
             raw_temp.unlink()
+        try:
+            meta_path.write_text(
+                json.dumps(
+                    {
+                        "cache_key": cache_key,
+                        "draw_version": TRAJECTORY_DRAW_VERSION,
+                        "payload": cache_payload,
+                        "tracking_path": str(selected_ball_path) if selected_ball_path is not None else None,
+                        "tracking_rows": len(selected_ball_df) if selected_ball_df is not None else 0,
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+        except OSError:
+            pass
         return final_out
     except Exception as e:
         print(f"[Warning] ffmpeg failed: {e}")
@@ -1500,15 +1832,32 @@ def generate_report_card(
 # ========================================================
 # スローモーション動画生成 (0.25x / 0.5x / 1.0x)
 # ========================================================
-def get_or_create_slow_video(video_name: str, kp_df: pd.DataFrame, speed_factor: float = 1.0) -> Path:
-    """指定の再生速度 (1.0, 0.5, 0.25) の骨格動画パスを取得または生成。"""
-    base_video = create_skeleton_video(video_name, kp_df)
+def get_or_create_slow_video(
+    video_name: str,
+    kp_df: pd.DataFrame,
+    speed_factor: float = 1.0,
+    ball_df: pd.DataFrame = None,
+    release_frame: int = None,
+    net_frame: int = None,
+) -> Path:
+    """Return a skeleton video at the requested playback speed, creating it if needed."""
+    base_video = create_skeleton_video(
+        video_name,
+        kp_df,
+        ball_df=ball_df,
+        release_frame=release_frame,
+        net_frame=net_frame,
+    )
     if speed_factor >= 0.99:
         return base_video
 
     factor_str = f"slow{int(speed_factor * 100):03d}"
     slow_path = OUTPUT_DIR / f"skeleton_{video_name}_{factor_str}.mp4"
-    if slow_path.exists() and slow_path.stat().st_size > 0:
+    if (
+        slow_path.exists()
+        and slow_path.stat().st_size > 0
+        and slow_path.stat().st_mtime_ns >= base_video.stat().st_mtime_ns
+    ):
         return slow_path
 
     setpts_val = 1.0 / speed_factor

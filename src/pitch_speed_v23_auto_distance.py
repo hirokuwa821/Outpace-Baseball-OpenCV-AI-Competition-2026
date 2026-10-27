@@ -168,8 +168,8 @@ def load_ball_csv(path: Path):
         reader = csv.DictReader(f)
         for r in reader:
             try:
-                conf = float(r.get('confidence', 0))
-                if conf < 0.3:
+                confidence = r.get('confidence')
+                if confidence not in (None, "") and float(confidence) < 0.3:
                     continue
                 rows.append({
                     'frame': int(r['frame']),

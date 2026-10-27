@@ -34,19 +34,33 @@ OUTPUT_DIR = ROOT_DIR / "output"
 HISTORY_FILE = OUTPUT_DIR / "analysis_history.csv"
 CONFIG_FILE = ROOT_DIR / "config.yaml"
 
-def get_ball_tracking_path(video_name):
+def get_ball_tracking_path(video_name, release_frame=None, net_frame=None):
     measured_tracking = pitch_mod.INPUT_DIR / f"{video_name}_tracking.csv"
     output_tracking = OUTPUT_DIR / f"{video_name}_tracking.csv"
-    if measured_tracking.exists():
-        if output_tracking.exists():
+    candidates = [measured_tracking, output_tracking]
+    valid_candidates = [
+        path
+        for path in candidates
+        if pitch_logic.is_valid_ball_tracking_csv(
+            path, release_frame=release_frame, net_frame=net_frame
+        )
+    ]
+    if valid_candidates:
+        selected = valid_candidates[0]
+        if selected == measured_tracking and output_tracking in valid_candidates:
             logging.info(
                 "Both measured and interpolated tracking CSVs exist for %s; using measured data: %s",
                 video_name,
                 measured_tracking,
             )
-        return measured_tracking
-    if output_tracking.exists():
-        return output_tracking
+        return selected
+    for path in candidates:
+        if path.exists():
+            logging.warning(
+                "Ignoring empty or invalid tracking CSV for %s: %s",
+                video_name,
+                path,
+            )
     return measured_tracking
 
 DEFAULT_PITCH_TYPES = {
@@ -343,12 +357,13 @@ def run_analysis(video, left_handed, release_frame=None, net_frame=None, pitcher
 
     kp_df = pitch_logic.get_keypoints_for_video(video, release_frame=release_frame)
 
-    ball_csv = get_ball_tracking_path(video)
-    if ball_csv.exists():
-        raw_ball_df = pd.read_csv(ball_csv)
+    ball_csv = get_ball_tracking_path(
+        video, release_frame=release_frame, net_frame=net_frame
+    )
+    raw_ball_df = pitch_logic.load_valid_ball_tracking_csv(ball_csv) if ball_csv else None
+    if raw_ball_df is not None:
         rows = pitch_mod.load_ball_csv(ball_csv)
     else:
-        raw_ball_df = None
         rows = []
 
     ball_df = raw_ball_df if raw_ball_df is not None and not raw_ball_df.empty else (pd.DataFrame(rows) if len(rows) > 0 else None)
@@ -692,7 +707,13 @@ should_run = (
 if should_run:
     with st.spinner(i18n.t("analyzing_spinner", lang)):
         res = run_analysis(selected_video, left_handed, pitcher_height_m=pitcher_height_m, pitch_type=selected_pitch_type)
-        skel_video_path = pitch_logic.create_skeleton_video(selected_video, res["kp_df"])
+        skel_video_path = pitch_logic.create_skeleton_video(
+            selected_video,
+            res["kp_df"],
+            ball_df=res.get("ball_df"),
+            release_frame=res.get("release_frame"),
+            net_frame=res.get("net_frame"),
+        )
         res["skel_video_path"] = skel_video_path
         st.session_state["analyzed_result"] = res
 
@@ -1236,7 +1257,14 @@ if "analyzed_result" in st.session_state and st.session_state["analyzed_result"]
                     key=f"video_speed_radio_{video}",
                 )
                 speed_factor = 1.0 if "1.0x" in speed_label else (0.5 if "0.5x" in speed_label else 0.25)
-                active_video_path = pitch_logic.get_or_create_slow_video(video, kp_df, speed_factor=speed_factor)
+                active_video_path = pitch_logic.get_or_create_slow_video(
+                    video,
+                    kp_df,
+                    speed_factor=speed_factor,
+                    ball_df=ball_df,
+                    release_frame=release_frame,
+                    net_frame=net_frame,
+                )
                 if active_video_path and Path(active_video_path).exists():
                     st.video(str(active_video_path))
                 else:
@@ -1338,7 +1366,7 @@ if "analyzed_result" in st.session_state and st.session_state["analyzed_result"]
                             p_pt = selected_pitch_type
                         else:
                             b_csv = get_ball_tracking_path(v_name)
-                            p_bdf = pd.read_csv(b_csv) if b_csv.exists() else None
+                            p_bdf = pitch_logic.load_valid_ball_tracking_csv(b_csv) if b_csv else None
                             p_rel, p_net = pitch_mod.BASE_FRAMES.get(v_name, (50, 70))
                             p_h = pitch_logic.estimate_pitcher_height(v_name) / 100.0
                             p_left = pitch_mod.HANDEDNESS.get(v_name, True)

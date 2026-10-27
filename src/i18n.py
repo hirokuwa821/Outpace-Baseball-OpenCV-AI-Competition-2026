@@ -2377,4 +2377,3 @@ def get_stuff_metrics_info(speed: float, spin: dict, ext: float, lang: str = "ja
         "sub_eff": sub_eff,
         "sub_run": sub_run,
     }
-
