@@ -35,4 +35,6 @@ Thumbs.db
 # Backup files
 *.backup
 *.bak
+update_app_final.py
+
 *_backup
