@@ -91,6 +91,14 @@ def get_s3_client():
 
 
 
+_last_s3_error: str | None = None
+
+
+def get_last_s3_error() -> str | None:
+    """Return the failure reason or AWS error code of the most recent S3 upload attempt."""
+    return _last_s3_error
+
+
 def upload_file_to_s3(local_path: Path | str, s3_key: str) -> bool:
     """Upload a local file to an S3 bucket.
 
@@ -109,18 +117,23 @@ def upload_file_to_s3(local_path: Path | str, s3_key: str) -> bool:
         environment variables are missing the function simply returns ``False``
         without attempting any network call.
     """
+    global _last_s3_error
+    sync_streamlit_secrets_to_env()
     if not is_aws_configured():
+        _last_s3_error = "bucket not configured"
         _logger.debug("AWS S3 configuration not found – skipping S3 upload.")
         return False
 
-    bucket_name = os.getenv("AWS_S3_BUCKET_NAME")
+    bucket_name = (os.getenv("AWS_S3_BUCKET_NAME") or "").strip()
     if not bucket_name:
+        _last_s3_error = "bucket not configured"
         _logger.debug("AWS_S3_BUCKET_NAME is empty – skipping S3 upload.")
         return False
 
     try:
         s3 = get_s3_client()
         if s3 is None:
+            _last_s3_error = "NoCredentialsError"
             _logger.debug("Failed to obtain S3 client – skipping upload.")
             return False
 
@@ -128,14 +141,22 @@ def upload_file_to_s3(local_path: Path | str, s3_key: str) -> bool:
         file_path = str(local_path)
         s3.upload_file(file_path, bucket_name, s3_key)
         _logger.info("Uploaded %s to s3://%s/%s", file_path, bucket_name, s3_key)
+        _last_s3_error = None
         return True
+    except (NoCredentialsError, PartialCredentialsError) as e:
+        _last_s3_error = type(e).__name__
+        _logger.error("S3 upload failed (credentials missing): %s", _last_s3_error)
+        return False
     except ClientError as e:
+        error_code = str(e.response.get("Error", {}).get("Code", "ClientError"))
+        _last_s3_error = error_code
         # Log the error without exposing any secret information.
-        _logger.error("S3 upload failed for %s -> %s/%s: %s", local_path, bucket_name, s3_key, e)
+        _logger.error("S3 upload failed for %s -> %s/%s: %s", local_path, bucket_name, s3_key, _last_s3_error)
         return False
     except Exception as e:
+        _last_s3_error = type(e).__name__
         # Catch‑all for unexpected errors (e.g., file not found).
-        _logger.error("Unexpected error during S3 upload: %s", e)
+        _logger.error("Unexpected error during S3 upload: %s", _last_s3_error)
         return False
 
 def list_videos_in_s3(prefix: str = "videos/", limit: int = 50) -> list[dict[str, Any]]:

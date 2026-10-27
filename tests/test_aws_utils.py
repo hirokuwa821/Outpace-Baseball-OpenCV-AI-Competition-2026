@@ -61,6 +61,41 @@ class TestAwsUtilsS3Upload(unittest.TestCase):
 
         result = aws_utils.upload_file_to_s3("videos/sample.mp4", "videos/sample.mp4")
         self.assertFalse(result)
+    def test_upload_failure_remembers_bucket_not_configured(self):
+        os.environ.pop("AWS_S3_BUCKET_NAME", None)
+        aws_utils.upload_file_to_s3("videos/sample.mp4", "videos/sample.mp4")
+        self.assertEqual(aws_utils.get_last_s3_error(), "bucket not configured")
+
+    @patch("src.aws_utils.get_s3_client")
+    def test_upload_failure_remembers_client_error_code(self, mock_get_client):
+        os.environ["AWS_S3_BUCKET_NAME"] = "test-bucket"
+        mock_s3 = MagicMock()
+        mock_s3.upload_file.side_effect = ClientError(
+            {"Error": {"Code": "AccessDenied", "Message": "Access Denied"}},
+            "PutObject"
+        )
+        mock_get_client.return_value = mock_s3
+
+        aws_utils.upload_file_to_s3("videos/sample.mp4", "videos/sample.mp4")
+        self.assertEqual(aws_utils.get_last_s3_error(), "AccessDenied")
+
+    @patch("src.aws_utils.get_s3_client")
+    def test_upload_failure_remembers_no_credentials_error(self, mock_get_client):
+        os.environ["AWS_S3_BUCKET_NAME"] = "test-bucket"
+        mock_get_client.return_value = None
+
+        aws_utils.upload_file_to_s3("videos/sample.mp4", "videos/sample.mp4")
+        self.assertEqual(aws_utils.get_last_s3_error(), "NoCredentialsError")
+
+    @patch("src.aws_utils.get_s3_client")
+    def test_upload_success_clears_last_s3_error(self, mock_get_client):
+        os.environ["AWS_S3_BUCKET_NAME"] = "test-bucket"
+        mock_s3 = MagicMock()
+        mock_get_client.return_value = mock_s3
+
+        aws_utils.upload_file_to_s3("videos/sample.mp4", "videos/sample.mp4")
+        self.assertIsNone(aws_utils.get_last_s3_error())
+
 
 
 class TestAwsUtilsS3ListAndDownload(unittest.TestCase):

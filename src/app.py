@@ -719,8 +719,8 @@ with st.sidebar:
                 new_name = pitch_logic.save_uploaded_video(uploaded_file)
                 st.success(i18n.t("upload_success", lang, name=new_name))
                 s3_key = f"videos/{new_name}.mp4"
-                s3_bucket = os.getenv("AWS_S3_BUCKET_NAME")
-                if s3_bucket:
+                if aws_utils.is_aws_configured():
+                    s3_bucket = os.getenv("AWS_S3_BUCKET_NAME", "").strip()
                     upload_ok = aws_utils.upload_file_to_s3(
                         VIDEOS_DIR / f"{new_name}.mp4",
                         s3_key,
@@ -730,8 +730,9 @@ with st.sidebar:
                         st.info(f"Uploaded to S3: s3://{s3_bucket}/{s3_key}")
                         logger.info("Video %s successfully uploaded to s3://%s/%s", new_name, s3_bucket, s3_key)
                     else:
-                        st.warning("S3 upload failed; the video was saved locally only.")
-                        logger.warning("Failed to upload video %s to s3://%s/%s", new_name, s3_bucket, s3_key)
+                        err_code = aws_utils.get_last_s3_error() or "UploadFailed"
+                        st.warning(f"S3 upload failed ({err_code}); the video was saved locally only.")
+                        logger.warning("Failed to upload video %s to s3://%s/%s (reason: %s)", new_name, s3_bucket, s3_key, err_code)
                 else:
                     logger.info("Local video %s saved (AWS_S3_BUCKET_NAME not configured)", new_name)
                 # 自動トラッキングをバックグラウンド実行
@@ -756,6 +757,8 @@ with st.sidebar:
             st.write(f"**Bucket:** `{s3_bucket}`")
             st.write(f"**Bedrock Model/Profile:** `{bedrock_model}`")
             st.write(f"**Last Uploaded S3 Key:** `{last_s3_key}`")
+            last_err = aws_utils.get_last_s3_error()
+            st.write(f"**Last S3 error:** `{last_err or 'None'}`")
 
             if st.button("Check AWS connection", key="btn_check_aws_status", width="stretch"):
                 with st.spinner("Checking S3 reachability via head_bucket..."):
