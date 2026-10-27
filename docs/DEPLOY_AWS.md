@@ -317,3 +317,22 @@ python src/pitch_speed_v23_auto_distance.py
   飛行時間: 0.6343 s   初速推定: 102.73 km/h
 ```
 
+
+---
+
+## 7. Current Demo Hosting: Streamlit Community Cloud
+
+The live demo of Outpace Baseball is demonstrated on **Streamlit Community Cloud** (with an ephemeral filesystem).
+
+### Configuration & Security Best Practices:
+1. **Credentials Management**:
+   - AWS credentials on Streamlit Community Cloud are supplied securely via **Streamlit Cloud Secrets** (`st.secrets` in the cloud dashboard) or environment variables.
+   - For local development, copy `.streamlit/secrets.toml.example` to `.streamlit/secrets.toml`. `.streamlit/secrets.toml` is ignored by `.gitignore` and must **never** be committed.
+2. **Dedicated Least-Privilege IAM User**:
+   - Create a dedicated IAM user specifically for the Streamlit Community Cloud demo.
+   - Attach **only** the inline policy defined in `deploy/iam-policy.json` (granting `s3:ListBucket`, `s3:PutObject` / `s3:GetObject` on `videos/*` and `results/*`, and Bedrock Nova 2 Lite model invocation).
+   - Do **not** grant administrator or broad AWS permissions.
+3. **Key Rotation & Deletion**:
+   - Never commit AWS access keys, secret keys, or tokens to version control.
+   - Rotate or delete the IAM demo access keys after competition judging concludes.
+

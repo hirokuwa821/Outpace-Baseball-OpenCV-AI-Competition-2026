@@ -161,9 +161,10 @@ Run the standalone physics smoke test:
 python src/pitch_speed_v23_auto_distance.py
 ```
 
-## 10. AWS Cloud Deployment (EC2 + Docker)
+## 10. AWS Cloud Deployment & Streamlit Community Cloud
 
-For complete step-by-step instructions on deploying the application to an **Amazon EC2** instance with automated S3 sync and Amazon Bedrock AI coaching via an IAM instance role, see:
+- **Live Demo (Streamlit Community Cloud)**: The live demo runs on Streamlit Community Cloud with AWS credentials supplied via Streamlit secrets (`st.secrets`). A dedicated least-privilege IAM user policy is provided in [`deploy/iam-policy.json`](deploy/iam-policy.json). Example secrets template: [`.streamlit/secrets.toml.example`](.streamlit/secrets.toml.example).
+- **EC2 + Docker Production Deployment**: For complete step-by-step instructions on deploying the application to an **Amazon EC2** instance with automated S3 sync and Amazon Bedrock AI coaching via an IAM instance role, see:
 
 👉 **[AWS Deployment Guide (`docs/DEPLOY_AWS.md`)](docs/DEPLOY_AWS.md)**
 

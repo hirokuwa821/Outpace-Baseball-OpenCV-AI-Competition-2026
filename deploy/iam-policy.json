@@ -10,13 +10,16 @@
       "Resource": "arn:aws:s3:::YOUR_BUCKET_NAME"
     },
     {
-      "Sid": "S3VideoObjectReadWrite",
+      "Sid": "S3VideoAndResultsReadWrite",
       "Effect": "Allow",
       "Action": [
         "s3:PutObject",
         "s3:GetObject"
       ],
-      "Resource": "arn:aws:s3:::YOUR_BUCKET_NAME/videos/*"
+      "Resource": [
+        "arn:aws:s3:::YOUR_BUCKET_NAME/videos/*",
+        "arn:aws:s3:::YOUR_BUCKET_NAME/results/*"
+      ]
     },
     {
       "Sid": "BedrockNovaInference",

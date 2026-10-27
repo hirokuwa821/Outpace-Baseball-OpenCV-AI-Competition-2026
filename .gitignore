@@ -14,6 +14,9 @@ aws-credentials*
 *.pem
 *.key
 config.yaml
+.streamlit/secrets.toml
+secrets.toml
+
 
 # Local video and generated files
 videos/
