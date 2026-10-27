@@ -1,3 +1,4 @@
+import datetime
 import json
 import logging
 import os
@@ -17,6 +18,29 @@ from botocore.exceptions import (
 # Configure a module‑level logger (no credentials are logged)
 _logger = logging.getLogger(__name__)
 
+DEFAULT_VIDEOS_DIR = Path(__file__).resolve().parent.parent / "videos"
+
+
+def sync_streamlit_secrets_to_env() -> None:
+    """Sync AWS configuration from Streamlit secrets to os.environ if present."""
+    try:
+        import streamlit as st
+        if hasattr(st, "secrets"):
+            for key in (
+                "AWS_ACCESS_KEY_ID",
+                "AWS_SECRET_ACCESS_KEY",
+                "AWS_SESSION_TOKEN",
+                "AWS_DEFAULT_REGION",
+                "AWS_REGION",
+                "AWS_S3_BUCKET_NAME",
+                "BEDROCK_MODEL_ID",
+                "BEDROCK_MAX_TOKENS",
+            ):
+                if key in st.secrets and not os.getenv(key):
+                    os.environ[key] = str(st.secrets[key])
+    except Exception:
+        pass
+
 
 def is_aws_configured() -> bool:
     """Return ``True`` if the required AWS environment variables are present.
@@ -25,7 +49,26 @@ def is_aws_configured() -> bool:
     ``AWS_DEFAULT_REGION`` is optional – ``boto3`` will fall back to its default
     resolution chain.
     """
-    return bool(os.getenv("AWS_S3_BUCKET_NAME"))
+    sync_streamlit_secrets_to_env()
+    return bool(os.getenv("AWS_S3_BUCKET_NAME", "").strip())
+
+
+def get_git_commit_short() -> str | None:
+    """Return current git commit short hash, or None if unavailable."""
+    try:
+        import subprocess
+        res = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=2,
+            check=False,
+        )
+        if res.returncode == 0 and res.stdout.strip():
+            return res.stdout.strip()
+    except Exception:
+        pass
+    return None
 
 
 def get_s3_client():
@@ -40,7 +83,12 @@ def get_s3_client():
     # boto3 automatically picks up credentials from environment variables,
     # ~/.aws/ credentials files, or an attached IAM role – we do not pass any
     # secret values explicitly.
-    return boto3.client("s3")
+    try:
+        return boto3.client("s3")
+    except Exception as e:
+        _logger.warning("Could not instantiate S3 client: %s", e)
+        return None
+
 
 
 def upload_file_to_s3(local_path: Path | str, s3_key: str) -> bool:
@@ -89,6 +137,245 @@ def upload_file_to_s3(local_path: Path | str, s3_key: str) -> bool:
         # Catch‑all for unexpected errors (e.g., file not found).
         _logger.error("Unexpected error during S3 upload: %s", e)
         return False
+
+def list_videos_in_s3(prefix: str = "videos/", limit: int = 50) -> list[dict[str, Any]]:
+    """List video files in the configured S3 bucket under the given prefix.
+
+    Only objects ending in .mp4, .mov, or .m4v are returned, sorted newest first.
+    Returns an empty list if AWS S3 is unconfigured or if an error occurs.
+    """
+    if not is_aws_configured():
+        return []
+
+    bucket_name = (os.getenv("AWS_S3_BUCKET_NAME") or "").strip()
+    if not bucket_name:
+        return []
+
+    try:
+        s3 = get_s3_client()
+        if s3 is None:
+            return []
+
+        response = s3.list_objects_v2(
+            Bucket=bucket_name,
+            Prefix=prefix,
+            MaxKeys=max(100, min(1000, limit * 2)),
+        )
+        contents = response.get("Contents", [])
+        video_extensions = (".mp4", ".mov", ".m4v")
+        results = []
+        for obj in contents:
+            key = obj.get("Key", "")
+            if not key or key.endswith("/"):
+                continue
+            if not key.lower().endswith(video_extensions):
+                continue
+            last_mod = obj.get("LastModified")
+            last_mod_iso = last_mod.isoformat() if hasattr(last_mod, "isoformat") else str(last_mod)
+            results.append({
+                "key": key,
+                "name": Path(key).name,
+                "size_bytes": int(obj.get("Size", 0)),
+                "last_modified": last_mod_iso,
+                "_dt": last_mod,
+            })
+
+        results.sort(key=lambda x: str(x["_dt"] or ""), reverse=True)
+        for r in results:
+            r.pop("_dt", None)
+
+        return results[:limit]
+    except ClientError as e:
+        _logger.warning("Failed to list S3 videos from bucket %s: %s", bucket_name, e)
+        return []
+    except Exception as e:
+        _logger.warning("Unexpected error listing S3 videos from bucket %s: %s", bucket_name, e)
+        return []
+
+
+def download_video_from_s3(key: str, dest_dir: Path | str | None = None) -> Path | None:
+    """Download a video file from S3 to dest_dir with path-traversal and size protections.
+
+    Security & constraints:
+    - Key must reside under 'videos/'.
+    - Only the basename is used; path traversal attempts (e.g. '../') are rejected.
+    - Files over 100 MB are rejected based on S3 ContentLength.
+    - If the local file already exists with identical size, download is skipped.
+
+    Returns the Path to the local file, or None if skipped/failed/rejected.
+    """
+    if not is_aws_configured():
+        _logger.debug("AWS S3 not configured; skipping download.")
+        return None
+
+    bucket_name = (os.getenv("AWS_S3_BUCKET_NAME") or "").strip()
+    if not bucket_name:
+        return None
+
+    if not isinstance(key, str):
+        return None
+
+    norm_key = key.replace("\\", "/")
+    if not norm_key.startswith("videos/") or norm_key == "videos/":
+        _logger.warning("Rejected S3 download: key '%s' does not start with 'videos/'", key)
+        return None
+
+    key_parts = norm_key.split("/")
+    if ".." in key_parts or "." in key_parts:
+        _logger.warning("Rejected S3 download: path traversal element in key '%s'", key)
+        return None
+
+    filename = Path(norm_key).name
+    if not filename or filename in (".", "..") or "/" in filename or "\\" in filename:
+        _logger.warning("Rejected S3 download: invalid filename '%s' in key '%s'", filename, key)
+        return None
+
+    destination_dir = Path(dest_dir) if dest_dir is not None else DEFAULT_VIDEOS_DIR
+    destination_dir.mkdir(parents=True, exist_ok=True)
+    target_path = (destination_dir / filename).resolve()
+
+    try:
+        target_path.relative_to(destination_dir.resolve())
+    except ValueError:
+        _logger.error("Security alert: Path traversal attempt blocked for key '%s'", key)
+        return None
+
+    try:
+        s3 = get_s3_client()
+        if s3 is None:
+            return None
+
+        head = s3.head_object(Bucket=bucket_name, Key=key)
+        content_length = int(head.get("ContentLength", 0))
+
+        MAX_BYTES = 100 * 1024 * 1024  # 100 MB
+        if content_length > MAX_BYTES:
+            _logger.warning(
+                "S3 video '%s' size (%d bytes) exceeds 100 MB limit; download aborted.",
+                key,
+                content_length,
+            )
+            return None
+
+        if target_path.exists() and target_path.stat().st_size == content_length:
+            _logger.info(
+                "Local file %s already exists with matching size (%d bytes); skipping S3 download.",
+                target_path,
+                content_length,
+            )
+            return target_path
+
+        _logger.info("Downloading s3://%s/%s -> %s (%d bytes)", bucket_name, key, target_path, content_length)
+        s3.download_file(bucket_name, key, str(target_path))
+        return target_path
+    except ClientError as e:
+        _logger.error("Failed to download S3 video s3://%s/%s: %s", bucket_name, key, e)
+        return None
+    except Exception as e:
+        _logger.error("Unexpected error downloading s3://%s/%s: %s", bucket_name, key, e)
+        return None
+
+def save_result_summary_to_s3(name: str, summary: dict[str, Any]) -> bool:
+    """Save a compact pitch-analysis metrics summary JSON to results/<name>.json in S3.
+
+    Only scalar metrics and summary metadata are written; no keypoints or video files.
+    """
+    if not is_aws_configured():
+        return False
+
+    bucket_name = (os.getenv("AWS_S3_BUCKET_NAME") or "").strip()
+    if not bucket_name:
+        return False
+
+    clean_name = Path(name).stem.replace(" ", "_")
+    s3_key = f"results/{clean_name}.json"
+
+    payload: dict[str, Any] = {
+        "video": str(summary.get("video") or clean_name),
+        "fps": float(summary.get("fps") or 30.0),
+        "release_frame": int(summary.get("release_frame") or 0),
+        "arrival_frame": int(summary.get("arrival_frame") or 0),
+        "frame_source": str(summary.get("frame_source") or "assumed"),
+        "flight_time_s": float(summary.get("flight_time_s") or 0.0),
+        "extension_m": float(summary.get("extension_m") or 0.0),
+        "pitch_distance_m": float(summary.get("pitch_distance_m") or 0.0),
+        "velocity_kmh": float(summary.get("velocity_kmh") or 0.0),
+        "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "git_commit": get_git_commit_short(),
+    }
+
+    for k in ("spin_rate_rpm", "active_spin_pct", "gyro_angle_deg", "ivb_cm", "hb_cm", "pitch_type", "mechanics_score"):
+        if k in summary and summary[k] is not None:
+            val = summary[k]
+            if isinstance(val, (int, float, str, bool)):
+                payload[k] = val
+
+    try:
+        s3 = get_s3_client()
+        if s3 is None:
+            return False
+
+        body = json.dumps(payload, indent=2, ensure_ascii=False).encode("utf-8")
+        s3.put_object(
+            Bucket=bucket_name,
+            Key=s3_key,
+            Body=body,
+            ContentType="application/json",
+        )
+        _logger.info("Saved result summary to s3://%s/%s", bucket_name, s3_key)
+        return True
+    except ClientError as e:
+        _logger.warning("Failed to save result summary to s3://%s/%s: %s", bucket_name, s3_key, e)
+        return False
+    except Exception as e:
+        _logger.warning("Unexpected error saving result summary to s3://%s/%s: %s", bucket_name, s3_key, e)
+        return False
+
+
+def get_aws_status() -> dict[str, Any]:
+    """Inspect and return current AWS configuration and S3 reachability.
+
+    Security: Never includes secret keys, session tokens, or credentials.
+    """
+    sync_streamlit_secrets_to_env()
+    bucket_name = (os.getenv("AWS_S3_BUCKET_NAME") or "").strip()
+    region_str = (
+        os.getenv("AWS_REGION")
+        or os.getenv("AWS_DEFAULT_REGION")
+        or "Not configured"
+    ).strip()
+
+    status: dict[str, Any] = {
+        "configured": bool(bucket_name),
+        "region": region_str,
+        "bucket": bucket_name if bucket_name else "Not configured",
+        "bedrock_model_id": resolve_bedrock_model_id(region_str if region_str != "Not configured" else None),
+        "s3_reachable": False,
+        "s3_error": None,
+    }
+
+    if not bucket_name:
+        status["s3_error"] = "AWS_S3_BUCKET_NAME is not set"
+        return status
+
+    try:
+        s3 = get_s3_client()
+        if s3 is None:
+            status["s3_error"] = "Could not initialize S3 client (credentials missing or invalid)"
+            return status
+
+        s3.head_bucket(Bucket=bucket_name)
+        status["s3_reachable"] = True
+    except ClientError as e:
+        err_code = e.response.get("Error", {}).get("Code", "ClientError")
+        status["s3_error"] = f"{err_code}: {e}"
+        _logger.warning("S3 head_bucket check failed for %s: %s", bucket_name, e)
+    except Exception as e:
+        status["s3_error"] = str(e)
+        _logger.warning("Unexpected error during S3 head_bucket check for %s: %s", bucket_name, e)
+
+    return status
+
 
 
 DEFAULT_BEDROCK_MODEL_ID = "amazon.nova-2-lite-v1:0"
