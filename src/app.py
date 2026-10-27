@@ -581,6 +581,28 @@ with st.sidebar:
     else:
         selected_video = None
 
+    # S3 動画ワークスペース読み込み (AWS S3設定時のみ)
+    if aws_utils.is_aws_configured():
+        with st.expander("☁️ Videos stored in S3", expanded=False):
+            s3_vids = aws_utils.list_videos_in_s3(prefix="videos/", limit=50)
+            if s3_vids:
+                s3_opts = {
+                    f"{v['name']} ({v['size_bytes'] / (1024 * 1024):.1f} MB)": v["key"]
+                    for v in s3_vids
+                }
+                chosen_s3_label = st.selectbox("S3 video file", list(s3_opts.keys()), key="sel_s3_video_file")
+                chosen_s3_key = s3_opts[chosen_s3_label]
+                if st.button("Load into workspace", key="btn_load_s3_video", width="stretch"):
+                    with st.spinner("Downloading video from S3..."):
+                        dl_res = aws_utils.download_video_from_s3(chosen_s3_key, dest_dir=VIDEOS_DIR)
+                        if dl_res:
+                            st.success(f"Loaded {dl_res.name} into workspace.")
+                            st.rerun()
+                        else:
+                            st.error("Failed to download video from S3.")
+            else:
+                st.caption("No video files (.mp4/.mov/.m4v) found under 'videos/' in S3.")
+
     is_left_default = pitch_mod.HANDEDNESS.get(selected_video, True) if selected_video else True
     handed_labels = [i18n.t("right_pitcher", lang), i18n.t("left_pitcher", lang)]
     left_handed = (
@@ -704,6 +726,7 @@ with st.sidebar:
                         s3_key,
                     )
                     if upload_ok:
+                        st.session_state["last_uploaded_s3_key"] = f"s3://{s3_bucket}/{s3_key}"
                         st.info(f"Uploaded to S3: s3://{s3_bucket}/{s3_key}")
                         logger.info("Video %s successfully uploaded to s3://%s/%s", new_name, s3_bucket, s3_key)
                     else:
@@ -718,6 +741,30 @@ with st.sidebar:
                     pass
                 st.session_state.pop("analyzed_result", None)
                 st.rerun()
+
+    st.markdown("---")
+    with st.expander("☁️ AWS status", expanded=False):
+        s3_bucket = os.getenv("AWS_S3_BUCKET_NAME", "").strip()
+        aws_region = os.getenv("AWS_REGION") or os.getenv("AWS_DEFAULT_REGION") or "Not configured"
+        bedrock_model = aws_utils.get_bedrock_model_id()
+        last_s3_key = st.session_state.get("last_uploaded_s3_key", "None")
+
+        if not s3_bucket:
+            st.info("AWS S3 is not configured. Running in local mode.")
+        else:
+            st.write(f"**Region:** `{aws_region}`")
+            st.write(f"**Bucket:** `{s3_bucket}`")
+            st.write(f"**Bedrock Model/Profile:** `{bedrock_model}`")
+            st.write(f"**Last Uploaded S3 Key:** `{last_s3_key}`")
+
+            if st.button("Check AWS connection", key="btn_check_aws_status", width="stretch"):
+                with st.spinner("Checking S3 reachability via head_bucket..."):
+                    status = aws_utils.get_aws_status()
+                    if status.get("s3_reachable"):
+                        st.success("✅ S3 connection verified (head_bucket successful)")
+                    else:
+                        err = status.get("s3_error", "Unknown error")
+                        st.error(f"❌ S3 reachability check failed: {err}")
 
 # 初回またはボタン押下または動画切り替えで解析
 has_valid_video = bool(selected_video and (VIDEOS_DIR / f"{selected_video}.mp4").exists())
@@ -749,6 +796,37 @@ if should_run:
         )
         res["skel_video_path"] = skel_video_path
         st.session_state["analyzed_result"] = res
+
+        # S3 結果サマリーの保存 (S3が設定されている場合)
+        if aws_utils.is_aws_configured():
+            try:
+                frame_src = "preset" if selected_video in pitch_mod.BASE_FRAMES else ("manual" if "scrub_slider" in st.session_state else "assumed")
+                sp_res = res.get("spin_data", {})
+                summary_data = {
+                    "video": selected_video,
+                    "fps": float(res.get("video_fps", 30.0)),
+                    "release_frame": int(res.get("release_frame", 0)),
+                    "arrival_frame": int(res.get("net_frame", 0)),
+                    "frame_source": frame_src,
+                    "flight_time_s": round(float(res.get("flight_time", 0.0)), 4),
+                    "extension_m": round(float(res.get("extension", 0.0)), 2),
+                    "pitch_distance_m": round(float(res.get("pitch_distance", 0.0)), 2),
+                    "velocity_kmh": round(float(res.get("speed_kmh", 0.0)), 2),
+                    "pitch_type": selected_pitch_type,
+                    "spin_rate_rpm": sp_res.get("spin_rate_rpm"),
+                    "ivb_cm": sp_res.get("ivb_cm"),
+                    "hb_cm": sp_res.get("hb_cm"),
+                }
+                bucket_name = (os.getenv("AWS_S3_BUCKET_NAME") or "").strip()
+                clean_stem = Path(selected_video).stem.replace(" ", "_")
+                ok = aws_utils.save_result_summary_to_s3(selected_video, summary_data)
+                if ok:
+                    res["s3_summary_url"] = f"s3://{bucket_name}/results/{clean_stem}.json"
+                    logger.info("Saved result summary to %s", res["s3_summary_url"])
+                else:
+                    logger.warning("Could not save result summary to S3 for %s", selected_video)
+            except Exception as e:
+                logger.warning("Error saving result summary to S3 for %s: %s", selected_video, e)
 
         # 履歴保存
         if run_btn:
@@ -807,6 +885,8 @@ if "analyzed_result" in st.session_state and st.session_state["analyzed_result"]
     disp_dist = i18n.convert_distance(dist, dist_unit)
 
     with tab_main:
+        if res.get("s3_summary_url"):
+            st.caption(f"☁️ Result summary saved to `{res['s3_summary_url']}`")
         col_left, col_right = st.columns([1.1, 1.6])
 
         with col_left:
@@ -998,6 +1078,10 @@ if "analyzed_result" in st.session_state and st.session_state["analyzed_result"]
                 )
                 components.html(spin_3d_html, height=310)
                 st.caption(f"<small style='color:#334155; font-weight:600;'>{i18n.t('spin_3d_help', lang)}</small>", unsafe_allow_html=True)
+                spin_disclaimer = i18n.t("spin_3d_disclaimer", lang)
+                if spin_disclaimer == "spin_3d_disclaimer":
+                    spin_disclaimer = "Illustrative visualization based on estimated spin axis and efficiency; not measured. Accuracy is limited."
+                st.caption(spin_disclaimer)
 
                 with st.expander(i18n.t("view_2d_clock", lang), expanded=False):
                     pt_col = pitch_logic.PITCH_COLORS.get(selected_pitch_type, "#ff3366")

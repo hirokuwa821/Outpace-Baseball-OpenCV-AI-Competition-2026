@@ -810,6 +810,13 @@ TRANSLATIONS = {
         "ko": "드래그하여 3D 시점을 회전할 수 있습니다. 우측 상단 버튼으로 회전 속도를 변경하세요.",
         "zh": "可拖曳旋轉3D視角，右上角按鈕可切換旋轉速度與暫停。",
     },
+    "spin_3d_disclaimer": {
+        "ja": "推定された回転軸と効率に基づく説明用ビジュアライゼーションであり、実測値ではありません。精度には限界があります。",
+        "en": "Illustrative visualization based on estimated spin axis and efficiency; not measured. Accuracy is limited.",
+        "es": "Visualización ilustrativa basada en el eje y la eficiencia de giro estimados; no medidos. La precisión es limitada.",
+        "ko": "추정된 회전축 및 효율에 기반한 예시용 시각화이며 실측치가 아닙니다. 정확도에는 한계가 있습니다.",
+        "zh": "基於估算之轉軸與旋轉效率之示意視覺化，非實際測量值。精確度存在限制。",
+    },
     "movement_plot_title": {
         "ja": "🎯 球種別変化量マップ (Movement Plot: IVB vs HB)",
         "en": "🎯 Pitch Movement Plot (IVB vs HB)",
@@ -1739,6 +1746,13 @@ _SAFE_FALLBACKS = {
     "coach_spinner": {"ja": "Amazon Bedrockに質問しています…", "en": "Asking Amazon Bedrock...", "es": "Consultando a Amazon Bedrock…", "ko": "Amazon Bedrock에 질문하는 중…", "zh": "正在向 Amazon Bedrock 提问…"},
     "coach_token_limit_warning": {"ja": "⚠️ 回答が最大トークン数に達したため、途中で終了した可能性があります。", "en": "⚠️ The response may have ended prematurely because it reached the maximum token limit.", "es": "⚠️ La respuesta puede haber terminado de forma incompleta.", "ko": "⚠️ 답변이 최대 토큰 수에 도달했습니다.", "zh": "⚠️ 回答已达到最大令牌(Token)上限。"},
     "coach_error_default": {"ja": "Bedrockから回答を取得できませんでした。", "en": "Could not retrieve a response from Bedrock.", "es": "No se pudo obtener una respuesta de Bedrock.", "ko": "Bedrock에서 답변을 가져올 수 없습니다.", "zh": "未能从 Bedrock 获取回答。"},
+    "spin_3d_disclaimer": {
+        "ja": "推定された回転軸と効率に基づく説明用ビジュアライゼーションであり、実測値ではありません。精度には限界があります。",
+        "en": "Illustrative visualization based on estimated spin axis and efficiency; not measured. Accuracy is limited.",
+        "es": "Visualización ilustrativa basada en el eje y la eficiencia de giro estimados; no medidos. La precisión es limitada.",
+        "ko": "추정된 회전축 및 효율에 기반한 예시용 시각화이며 실측치가 아닙니다. 정확도에는 한계가 있습니다.",
+        "zh": "基於估算之轉軸與旋轉效率之示意視覺化，非實際測量值。精確度存在限制。",
+    },
 }
 
 
